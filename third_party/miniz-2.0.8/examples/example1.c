@@ -19,6 +19,7 @@ static const char *s_pStr = "Good morning Dr. Chandra. This is Hal. I am ready f
 int main(int argc, char *argv[])
 {
 	{
+<<<<<<< HEAD
 		mz_zip_archive zip_archive;
 		memset(&zip_archive, 0, sizeof(zip_archive)); // mz_zip_archive contains a bunch of pointers. set all to nullptr
 		mz_bool status = mz_zip_writer_init(&zip_archive, 0);
@@ -35,6 +36,24 @@ int main(int argc, char *argv[])
 
 		status = mz_zip_writer_end(&zip_archive);
 		if (!status)
+=======
+		mz_zip_archive zip_archive;
+		memset(&zip_archive, 0, sizeof(zip_archive)); // mz_zip_archive contains a bunch of pointers. set all to nullptr
+		mz_bool status = mz_zip_writer_init(&zip_archive, 0);
+		if (!status)
+			return;
+
+		status = mz_zip_writer_add_file(&zip_archive, "Images.zip", "Images/title.png", NULL, 0, MZ_DEFAULT_COMPRESSION);
+		if (!status)
+			return;
+
+		status = mz_zip_writer_finalize_archive(&zip_archive);
+		if (!status)
+			return;
+
+		status = mz_zip_writer_end(&zip_archive);
+		if (!status)
+>>>>>>> upstream/master
 			return;
 	}
 
