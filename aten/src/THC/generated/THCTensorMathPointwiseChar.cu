@@ -1,3 +1,5 @@
-#include "../THCTensorMathPointwise.cuh"
-#include "../generic/THCTensorMathPointwise.cu"
-#include "../THCGenerateCharType.h"
+#include <THC/THCTensorMathPointwise.cuh>
+#include <THC/THCTensor.hpp>
+
+#include <THC/generic/THCTensorMathPointwise.cu>
+#include <THC/THCGenerateCharType.h>

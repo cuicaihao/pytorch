@@ -2,24 +2,32 @@
 
 set -ex
 
-# Install ccache from source.
-# Needs specific branch to work with nvcc (ccache/ccache#145)
-# Also pulls in a commit that disables documentation generation,
-# as this requires asciidoc to be installed (which pulls in a LOT of deps).
-pushd /tmp
-git clone https://github.com/pietern/ccache -b ccbin
-pushd ccache
-./autogen.sh
-./configure --prefix=/usr/local
-make "-j$(nproc)" install
-popd
-popd
+# Install sccache from pre-compiled binary.
+curl https://s3.amazonaws.com/ossci-linux/sccache -o /usr/local/bin/sccache
+chmod a+x /usr/local/bin/sccache
 
-# Install sccache from binary release.
-# Note: this release does NOT yet work with nvcc.
-pushd /tmp
-curl -LOs https://github.com/mozilla/sccache/releases/download/0.2.5/sccache-0.2.5-x86_64-unknown-linux-musl.tar.gz
-tar -zxvf sccache-0.2.5-x86_64-unknown-linux-musl.tar.gz
-mv sccache-0.2.5-x86_64-unknown-linux-musl/sccache /usr/local/bin/sccache
-rm -rf sccache-0.2.5-x86_64-unknown-linux-musl*
-popd
+# Setup SCCACHE
+###############################################################################
+SCCACHE="$(which sccache)"
+if [ -z "${SCCACHE}" ]; then
+  echo "Unable to find sccache..."
+  exit 1
+fi
+
+# If rocm build, if hcc file exists then use hcc else clang(hip-clang) for sccache
+if [[ "${BUILD_ENVIRONMENT}" == *-rocm* ]]; then
+  if [[ -e "/opt/rocm/hcc/bin/hcc" ]]; then
+    HIPCOM_DEST_PATH="$(readlink -f /opt/rocm/hcc/bin/hcc )"
+  else
+    HIPCOM_DEST_PATH="$(readlink -f /opt/rocm/llvm/bin/clang )"
+  fi
+  HIPCOM_REAL_BINARY="$(dirname $HIPCOM_DEST_PATH)/hipcompiler_original"
+  mv "$HIPCOM_DEST_PATH" "$HIPCOM_REAL_BINARY"
+
+  # Create sccache wrapper.
+  (
+    echo "#!/bin/sh"
+    echo "exec $SCCACHE $HIPCOM_REAL_BINARY \"\$@\""
+  ) > "$HIPCOM_DEST_PATH"
+  chmod +x "$HIPCOM_DEST_PATH"
+fi

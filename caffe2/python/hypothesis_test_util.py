@@ -50,6 +50,8 @@ import hypothesis.strategies as st
 import logging
 import numpy as np
 import os
+import six
+import struct
 
 
 def is_sandcastle():
@@ -64,19 +66,56 @@ def is_travis():
     return 'TRAVIS' in os.environ
 
 
+def to_float32(x):
+    return struct.unpack("f", struct.pack("f", float(x)))[0]
+
+
+#  "min_satisfying_examples" setting has been deprecated in hypothesis
+#  3.56.0 and removed in hypothesis 4.x
+def settings(*args, **kwargs):
+    if 'min_satisfying_examples' in kwargs and hypothesis.version.__version_info__ >= (3, 56, 0):
+        kwargs.pop('min_satisfying_examples')
+
+    if 'deadline' in kwargs and hypothesis.version.__version_info__ < (4, 44, 0):
+        kwargs.pop('deadline')
+
+    if 'timeout' in kwargs and hypothesis.version.__version_info__ >= (4, 44, 0):
+        if 'deadline' not in kwargs:
+            kwargs['deadline'] = kwargs['timeout'] * 1e3
+        kwargs.pop('timeout')
+
+    return hypothesis.settings(*args, **kwargs)
+
+# This wrapper wraps around `st.floats` and
+# sets width parameters to 32 if version is newer than 3.67.0
+def floats(*args, **kwargs):
+
+    width_supported = hypothesis.version.__version_info__ >= (3, 67, 0)
+    if 'width' in kwargs and not width_supported:
+        kwargs.pop('width')
+
+    if 'width' not in kwargs and width_supported:
+        kwargs['width'] = 32
+        if kwargs.get('min_value', None) is not None:
+            kwargs['min_value'] = to_float32(kwargs['min_value'])
+        if kwargs.get('max_value', None) is not None:
+            kwargs['max_value'] = to_float32(kwargs['max_value'])
+
+    return st.floats(*args, **kwargs)
+
+
 hypothesis.settings.register_profile(
     "sandcastle",
-    hypothesis.settings(
+    settings(
         derandomize=True,
         suppress_health_check=[hypothesis.HealthCheck.too_slow],
         database=None,
-        min_satisfying_examples=1,
         max_examples=100,
+        min_satisfying_examples=1,
         verbosity=hypothesis.Verbosity.verbose))
-
 hypothesis.settings.register_profile(
     "dev",
-    hypothesis.settings(
+    settings(
         suppress_health_check=[hypothesis.HealthCheck.too_slow],
         database=None,
         max_examples=10,
@@ -84,12 +123,13 @@ hypothesis.settings.register_profile(
         verbosity=hypothesis.Verbosity.verbose))
 hypothesis.settings.register_profile(
     "debug",
-    hypothesis.settings(
+    settings(
         suppress_health_check=[hypothesis.HealthCheck.too_slow],
         database=None,
         max_examples=1000,
         min_satisfying_examples=1,
         verbosity=hypothesis.Verbosity.verbose))
+
 hypothesis.settings.load_profile(
     'sandcastle' if is_sandcastle() else os.getenv('CAFFE2_HYPOTHESIS_PROFILE',
                                                    'dev')
@@ -102,8 +142,12 @@ def dims(min_value=1, max_value=5):
 
 def elements_of_type(dtype=np.float32, filter_=None):
     elems = None
-    if dtype in (np.float16, np.float32, np.float64):
-        elems = st.floats(min_value=-1.0, max_value=1.0)
+    if dtype is np.float16:
+        elems = floats(min_value=-1.0, max_value=1.0, width=16)
+    elif dtype is np.float32:
+        elems = floats(min_value=-1.0, max_value=1.0, width=32)
+    elif dtype is np.float64:
+        elems = floats(min_value=-1.0, max_value=1.0, width=64)
     elif dtype is np.int32:
         elems = st.integers(min_value=0, max_value=2 ** 31 - 1)
     elif dtype is np.int64:
@@ -250,13 +294,18 @@ def tensors1d(n, min_len=1, max_len=64, dtype=np.float32, elements=None):
 
 
 cpu_do = caffe2_pb2.DeviceOption()
-gpu_do = caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CUDA)
-device_options = [cpu_do] + ([gpu_do] if workspace.has_gpu_support else [])
+cuda_do = caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CUDA)
+hip_do = caffe2_pb2.DeviceOption(device_type=caffe2_pb2.HIP)
+gpu_do = caffe2_pb2.DeviceOption(device_type=workspace.GpuDeviceType)  # CUDA or ROCm
+# (bddppq) Do not rely on this no_hip option! It's just used to
+# temporarily skip some flaky tests on ROCM before it's getting more mature.
+_device_options_no_hip = [cpu_do] + ([cuda_do] if workspace.has_cuda_support else [])
+device_options = _device_options_no_hip + ([hip_do] if workspace.has_hip_support else [])
+
 # Include device option for each GPU
-expanded_device_options = [cpu_do] + (
-    [caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CUDA, cuda_gpu_id=i)
-     for i in range(workspace.NumCudaDevices())]
-    if workspace.has_gpu_support else [])
+expanded_device_options = [cpu_do] + [
+    caffe2_pb2.DeviceOption(device_type=workspace.GpuDeviceType, device_id=i)
+    for i in range(workspace.NumGpuDevices())]
 
 
 def device_checker_device_options():
@@ -273,7 +322,9 @@ gcs = dict(
 )
 
 gcs_cpu_only = dict(gc=st.sampled_from([cpu_do]), dc=st.just([cpu_do]))
-gcs_gpu_only = dict(gc=st.sampled_from([gpu_do]), dc=st.just([gpu_do]))
+gcs_cuda_only = dict(gc=st.sampled_from([cuda_do]), dc=st.just([cuda_do]))
+gcs_gpu_only = dict(gc=st.sampled_from([gpu_do]), dc=st.just([gpu_do]))  # CUDA or ROCm
+gcs_no_hip = dict(gc=st.sampled_from(_device_options_no_hip), dc=st.just(_device_options_no_hip))
 
 
 @contextlib.contextmanager
@@ -292,8 +343,6 @@ def runOpBenchmark(
     input_device_options=None,
     iterations=10,
 ):
-    if input_device_options is None:
-        input_device_options = {}
     op = copy.deepcopy(op)
     op.device_option.CopyFrom(device_option)
     net = caffe2_pb2.NetDef()
@@ -301,15 +350,49 @@ def runOpBenchmark(
     net.name = op.name if op.name else "test"
 
     with temp_workspace():
+        _input_device_options = input_device_options or \
+            core.InferOpBlobDevicesAsDict(op)[0]
         for (n, b) in zip(op.input, inputs):
             workspace.FeedBlob(
                 n,
                 b,
-                device_option=input_device_options.get(n, device_option)
+                device_option=_input_device_options.get(n, device_option)
             )
         workspace.CreateNet(net)
         ret = workspace.BenchmarkNet(net.name, 1, iterations, True)
     return ret
+
+
+def runOpOnInput(
+    device_option,
+    op,
+    inputs,
+    input_device_options=None,
+):
+    op = copy.deepcopy(op)
+    op.device_option.CopyFrom(device_option)
+
+    with temp_workspace():
+        if (len(op.input) > len(inputs)):
+            raise ValueError(
+                'must supply an input for each input on the op: %s vs %s' %
+                (op.input, inputs))
+        _input_device_options = input_device_options or \
+            core.InferOpBlobDevicesAsDict(op)[0]
+        for (n, b) in zip(op.input, inputs):
+            workspace.FeedBlob(
+                n,
+                b,
+                device_option=_input_device_options.get(n, device_option)
+            )
+        workspace.RunOperatorOnce(op)
+        outputs_to_check = list(range(len(op.output)))
+        outs = []
+        for output_index in outputs_to_check:
+            output_blob_name = op.output[output_index]
+            output = workspace.FetchBlob(output_blob_name)
+            outs.append(output)
+        return outs
 
 
 class HypothesisTestCase(test_util.TestCase):
@@ -317,6 +400,7 @@ class HypothesisTestCase(test_util.TestCase):
     A unittest.TestCase subclass with some helper functions for
     utilizing the `hypothesis` (hypothesis.readthedocs.io) library.
     """
+
     def assertDeviceChecks(
         self,
         device_options,
@@ -361,6 +445,7 @@ class HypothesisTestCase(test_util.TestCase):
         threshold=0.005,
         stepsize=0.05,
         input_device_options=None,
+        ensure_outputs_are_inferred=False,
     ):
         """
         Implements a standard numerical gradient checker for the operator
@@ -383,11 +468,13 @@ class HypothesisTestCase(test_util.TestCase):
             threshold=threshold,
             device_option=device_option,
             workspace_name=str(device_option),
+            input_device_options=input_device_options,
         )
         res, grad, grad_estimated = gc.CheckSimple(
             op, inputs, outputs_to_check, outputs_with_grads,
             grad_ops=grad_ops,
-            input_device_options=input_device_options
+            input_device_options=input_device_options,
+            ensure_outputs_are_inferred=ensure_outputs_are_inferred,
         )
         self.assertEqual(grad.shape, grad_estimated.shape)
         self.assertTrue(
@@ -442,7 +529,12 @@ class HypothesisTestCase(test_util.TestCase):
                     np.testing.assert_allclose(indices, ref_indices,
                                                atol=1e-4, rtol=1e-4)
 
-    def _assertInferTensorChecks(self, name, shapes, types, output):
+    def _assertInferTensorChecks(self, name, shapes, types, output,
+                                 ensure_output_is_inferred=False):
+        self.assertTrue(
+            not ensure_output_is_inferred or (name in shapes),
+            'Shape for {0} was not inferred'.format(name))
+
         if name not in shapes:
             # No inferred shape or type available
             return
@@ -482,7 +574,7 @@ class HypothesisTestCase(test_util.TestCase):
             # Temporarily catch these assertion errors when validating
             # inferred shape and type info
             logging.warning(str(e))
-            if os.getenv('CAFFE2_ASSERT_SHAPEINFERENCE') == '1':
+            if os.getenv('CAFFE2_ASSERT_SHAPEINFERENCE') == '1' or ensure_output_is_inferred:
                 raise e
 
     def assertReferenceChecks(
@@ -497,6 +589,7 @@ class HypothesisTestCase(test_util.TestCase):
         grad_reference=None,
         atol=None,
         outputs_to_check=None,
+        ensure_outputs_are_inferred=False,
     ):
         """
         This runs the reference Python function implementation
@@ -519,9 +612,6 @@ class HypothesisTestCase(test_util.TestCase):
 
                 self.assertReferenceChecks(gc, op, [X], softsign)
         """
-        if input_device_options is None:
-            input_device_options = {}
-
         op = copy.deepcopy(op)
         op.device_option.CopyFrom(device_option)
 
@@ -530,11 +620,13 @@ class HypothesisTestCase(test_util.TestCase):
                 raise ValueError(
                     'must supply an input for each input on the op: %s vs %s' %
                     (op.input, inputs))
+            _input_device_options = input_device_options or \
+                core.InferOpBlobDevicesAsDict(op)[0]
             for (n, b) in zip(op.input, inputs):
                 workspace.FeedBlob(
                     n,
                     b,
-                    device_option=input_device_options.get(n, device_option)
+                    device_option=_input_device_options.get(n, device_option)
                 )
             net = core.Net("opnet")
             net.Proto().op.extend([op])
@@ -546,7 +638,7 @@ class HypothesisTestCase(test_util.TestCase):
                 # Temporarily catch runtime errors when inferring shape
                 # and type info
                 logging.warning(str(e))
-                if os.getenv('CAFFE2_ASSERT_SHAPEINFERENCE') == '1':
+                if os.getenv('CAFFE2_ASSERT_SHAPEINFERENCE') == '1' or ensure_outputs_are_inferred:
                     raise e
             workspace.RunNetOnce(net)
             reference_outputs = reference(*inputs)
@@ -576,7 +668,8 @@ class HypothesisTestCase(test_util.TestCase):
                     )
                 if test_shape_inference:
                     self._assertInferTensorChecks(
-                        output_blob_name, shapes, types, output)
+                        output_blob_name, shapes, types, output,
+                        ensure_output_is_inferred=ensure_outputs_are_inferred)
                 outs.append(output)
             if grad_reference is not None:
                 assert output_to_grad is not None, \
@@ -588,6 +681,7 @@ class HypothesisTestCase(test_util.TestCase):
                         op, inputs, reference_outputs,
                         output_to_grad, grad_reference,
                         threshold=threshold)
+
             return outs
 
     def assertValidationChecks(
@@ -600,8 +694,6 @@ class HypothesisTestCase(test_util.TestCase):
             as_kwargs=True,
             init_net=None,
     ):
-        if input_device_options is None:
-            input_device_options = {}
         if as_kwargs:
             assert len(set(list(op.input) + list(op.output))) == \
                 len(op.input) + len(op.output), \
@@ -610,11 +702,13 @@ class HypothesisTestCase(test_util.TestCase):
         op.device_option.CopyFrom(device_option)
 
         with temp_workspace():
+            _input_device_options = input_device_options or \
+                core.InferOpBlobDevicesAsDict(op)[0]
             for (n, b) in zip(op.input, inputs):
                 workspace.FeedBlob(
                     n,
                     b,
-                    device_option=input_device_options.get(n, device_option)
+                    device_option=_input_device_options.get(n, device_option)
                 )
             if init_net:
                 workspace.RunNetOnce(init_net)
@@ -635,21 +729,20 @@ class HypothesisTestCase(test_util.TestCase):
         exception=(Exception,),
         regexp=None,
     ):
-        if input_device_options is None:
-            input_device_options = {}
-
         op = copy.deepcopy(op)
         op.device_option.CopyFrom(device_option)
 
         with temp_workspace():
+            _input_device_options = input_device_options or \
+                core.InferOpBlobDevicesAsDict(op)[0]
             for (n, b) in zip(op.input, inputs):
                 workspace.FeedBlob(
                     n,
                     b,
-                    device_option=input_device_options.get(n, device_option)
+                    device_option=_input_device_options.get(n, device_option)
                 )
             if regexp is None:
                 self.assertRaises(exception, workspace.RunOperatorOnce, op)
             else:
-                self.assertRaisesRegexp(
-                    exception, regexp, workspace.RunOperatorOnce, op)
+                six.assertRaisesRegex(
+                    self, exception, regexp, workspace.RunOperatorOnce, op)

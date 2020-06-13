@@ -5,14 +5,21 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "caffe2/core/init.h"
 #include "caffe2/core/operator.h"
 #include "caffe2/core/timer.h"
-#include "caffe2/proto/caffe2.pb.h"
+#include "caffe2/proto/caffe2_pb.h"
 #include "caffe2/utils/proto_utils.h"
+#include "caffe2/utils/string_utils.h"
+
+C10_DEFINE_string(
+    caffe2_override_executor,
+    "",
+    "Comma-separated list of executor overrides");
 
 namespace caffe2 {
 
-CAFFE_DEFINE_REGISTRY(
+C10_DEFINE_REGISTRY(
     NetRegistry,
     NetBase,
     const std::shared_ptr<const NetDef>&,
@@ -29,6 +36,8 @@ NetBase::NetBase(
           def->external_output().end()),
       name_(def->name()),
       net_def_(def) {
+  static GlobalInitIsCalledGuard guard;
+  C10_LOG_API_USAGE_ONCE("caffe2.net.create");
   // Check that node_name is empty for all ops
   for (const OperatorDef& op : def->op()) {
     if (op.has_device_option()) {
@@ -89,10 +98,45 @@ bool NetBase::RunAsync() {
 }
 
 namespace {
+const std::string kSimpleNet = "simple";
+
 std::vector<NetObserverCreator>* GetNetObserverCreators() {
   static std::vector<NetObserverCreator> creators;
   return &creators;
 }
+
+const std::unordered_map<std::string, std::string>& defaultOverrides() {
+  // redirecting legacy net types to async_scheduling (except for 'simple');
+  // async_scheduling checks net type for backward compatibility
+  static const std::unordered_map<std::string, std::string> overrides = {
+      {"dag", "async_scheduling"},
+      {"prof_dag", "async_scheduling"},
+      {"async_dag", "async_scheduling"},
+      {"async_polling", "async_scheduling"},
+      {"async_simple", "simple"}, // "async_simple" impl has been removed.
+      {"rnn", "simple"}, // "rnn" impl has been removed.
+  };
+  return overrides;
+}
+
+void ApplyPotentialExecutorOverride(std::string* net_type) {
+  auto executors = caffe2::split(',', FLAGS_caffe2_override_executor);
+  CAFFE_ENFORCE(
+      executors.size() % 2 == 0, "Invalid override executors flag value");
+  std::unordered_map<std::string, std::string> overrides;
+  for (const auto& kv : defaultOverrides()) {
+    overrides[kv.first] = kv.second;
+  }
+  for (size_t idx = 0; idx < executors.size(); idx += 2) {
+    overrides[executors[idx]] = executors[idx + 1];
+  }
+  if (overrides.count(*net_type)) {
+    VLOG(1) << "Overrode net type '" << *net_type << "' with '"
+            << overrides[*net_type] << "'";
+    *net_type = overrides[*net_type];
+  }
+}
+
 } // namespace
 
 void AddGlobalNetObserverCreator(NetObserverCreator creator) {
@@ -113,14 +157,17 @@ unique_ptr<NetBase> CreateNet(const NetDef& net_def, Workspace* ws) {
 unique_ptr<NetBase> CreateNet(
     const std::shared_ptr<const NetDef>& net_def,
     Workspace* ws) {
-  // In default, we will return a simple network that just runs all operators
-  // sequentially.
-  unique_ptr<NetBase> net;
-  if (!net_def->has_type()) {
-    net = std::unique_ptr<NetBase>(new SimpleNet(net_def, ws));
+  std::string net_type;
+  if (net_def->has_type() && !net_def->type().empty()) {
+    net_type = net_def->type();
   } else {
-    net = NetRegistry()->Create(net_def->type(), net_def, ws);
+    // By default, we will return a simple network that just runs all operators
+    // sequentially.
+    net_type = kSimpleNet;
   }
+  ApplyPotentialExecutorOverride(&net_type);
+  unique_ptr<NetBase> net = NetRegistry()->Create(net_type, net_def, ws);
+
   VLOG(1) << "Adding a global observer to a net";
   if (net) {
     auto* observer_creators = GetNetObserverCreators();
@@ -131,9 +178,61 @@ unique_ptr<NetBase> CreateNet(
   return net;
 }
 
-std::shared_ptr<TaskThreadPool> ExecutorHelper::GetPool(
+TaskThreadPoolBase* ExecutorHelper::GetPool(
     const DeviceOption& /* unused */) const {
   CAFFE_THROW("Not implemented");
+}
+
+std::vector<OperatorBase*> ExecutorHelper::GetOperators() const {
+  CAFFE_THROW("Not implemented");
+}
+
+int ExecutorHelper::GetNumWorkers() const {
+  CAFFE_THROW("Not implemented");
+}
+
+// benchmark an individual run so that we can FeedBlobs with new inputs
+// no warmup
+// return time taken in microseconds
+float NetBase::TEST_Benchmark_One_Run() {
+  Timer timer;
+  CAFFE_ENFORCE(Run(), "Run has failed.");
+  return timer.MicroSeconds();
+}
+
+std::vector<float> NetBase::TEST_Benchmark(
+    const int warmup_runs,
+    const int main_runs,
+    const bool run_individual) {
+  LOG(INFO) << "Starting benchmark, running warmup runs";
+  CAFFE_ENFORCE(
+      warmup_runs >= 0,
+      "Number of warm up runs should be non negative, provided ",
+      warmup_runs);
+  for (int run_idx = 0; run_idx < warmup_runs; ++run_idx) {
+    CAFFE_ENFORCE(Run(), "Warmup run ", run_idx, " has failed");
+  }
+
+  LOG(INFO) << "Running main runs";
+  CAFFE_ENFORCE(
+      main_runs >= 0,
+      "Number of main runs should be non negative, provided ",
+      main_runs);
+
+  Timer timer;
+  for (int run_idx = 0; run_idx < main_runs; ++run_idx) {
+    CAFFE_ENFORCE(Run(), "Main run ", run_idx, " has failed");
+  }
+  auto millis = timer.MilliSeconds();
+  LOG(INFO) << "Main runs finished. Milliseconds per iter: "
+            << millis / main_runs
+            << ". Iters per second: " << 1000.0 * main_runs / millis;
+
+  if (run_individual) {
+    LOG(INFO) << "Net does not support per-op benchmark; "
+                 "to run it, switch to a simple net type";
+  }
+  return std::vector<float>{millis / main_runs};
 }
 
 } // namespace caffe2

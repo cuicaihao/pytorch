@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Python.h>
-#include "torch/csrc/Types.h"
+#include <torch/csrc/python_headers.h>
+#include <torch/csrc/Types.h>
 
 namespace torch {
 

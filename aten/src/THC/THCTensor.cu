@@ -1,4 +1,14 @@
-#include "THCTensor.h"
+#include <THC/THCTensor.hpp>
+#include <THC/THCStorage.hpp>
 
-#include "generic/THCTensor.cu"
-#include "THCGenerateAllTypes.h"
+#include <THC/generic/THCTensor.cu>
+#include <THC/THCGenerateAllTypes.h>
+
+#include <THC/generic/THCTensor.cu>
+#include <THC/THCGenerateComplexTypes.h>
+
+#include <THC/generic/THCTensor.cu>
+#include <THC/THCGenerateBoolType.h>
+
+#include <THC/generic/THCTensor.cu>
+#include <THC/THCGenerateBFloat16Type.h>

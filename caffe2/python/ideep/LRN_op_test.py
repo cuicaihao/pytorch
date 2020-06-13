@@ -12,7 +12,7 @@ import caffe2.python.hypothesis_test_util as hu
 import caffe2.python.ideep_test_util as mu
 
 
-@unittest.skipIf(not workspace.C.use_ideep, "No IDEEP support.")
+@unittest.skipIf(not workspace.C.use_mkldnn, "No MKLDNN support.")
 class LRNTest(hu.HypothesisTestCase):
     @given(input_channels=st.integers(1, 3),
            batch_size=st.integers(1, 3),
@@ -37,6 +37,8 @@ class LRNTest(hu.HypothesisTestCase):
             batch_size, input_channels, im_size, im_size).astype(np.float32)
 
         self.assertDeviceChecks(dc, op, [X], [0])
+
+        self.assertGradientChecks(gc, op, [X], 0, [0])
 
 
 if __name__ == "__main__":

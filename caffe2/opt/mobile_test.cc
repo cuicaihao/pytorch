@@ -1,4 +1,5 @@
 #include "caffe2/core/common.h"
+#include "caffe2/opt/converter.h"
 #include "mobile.h"
 
 #include <gtest/gtest.h>
@@ -17,8 +18,8 @@ TEST(MobileTest, Convolution) {
       caffe2::OperatorDef* def = net.add_op();
       def->set_type("Conv");
       def->add_input("X");
-      def->add_input("W" + caffe2::to_string(i));
-      def->add_input("b" + caffe2::to_string(i));
+      def->add_input("W" + c10::to_string(i));
+      def->add_input("b" + c10::to_string(i));
       ADD_ARG(def, "kernel", i, 3);
       ADD_ARG(def, "stride", i, 1);
       ADD_ARG(def, "pad", i, 0);
@@ -33,7 +34,9 @@ TEST(MobileTest, Convolution) {
       def->mutable_device_option()->set_node_name("relu_runner");
     }
   }
-  auto optimized_net = caffe2::opt::addNNPACK(net);
+  auto nn = caffe2::convertToNNModule(net);
+  caffe2::opt::addNNPACK(&nn);
+  auto optimized_net = caffe2::convertToCaffe2Proto(nn, net);
   for (auto op : optimized_net.op()) {
     if (op.type() == "Conv") {
       assert(op.engine() == "NNPACK");

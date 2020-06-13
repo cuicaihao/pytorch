@@ -25,24 +25,24 @@ struct NodeEqualityDefault {
   }
 };
 
-template <typename G, typename EqualityClass = NodeEqualityDefault<typename G::NodeRef>>
+template <
+    typename G,
+    typename EqualityClass = NodeEqualityDefault<typename G::NodeRef>>
 class Match {
-public:
-  using SubgraphType = Subgraph<typename G::NodeType, typename G::EdgeType>;
+ public:
+  using SubgraphType = typename G::SubgraphType;
 
   Match(G& g) : MatchGraph(g) {
     // First we sort both the matching graph topologically.
     // This could give us a useful anchor in the best case.
-    auto topoMatch = nom::algorithm::tarjans(&MatchGraph);
-    for (auto scc : topoMatch) {
-      for (auto node : scc.getNodes()) {
-        MatchNodeList.emplace_back(node);
-      }
-    }
-    std::reverse(MatchNodeList.begin(), MatchNodeList.end());
+    auto result = nom::algorithm::topoSort(&MatchGraph);
+    MatchNodeList = result.nodes;
   }
 
-  std::vector<SubgraphType> recursiveMatch(typename G::NodeRef candidateNode, std::vector<typename G::NodeRef> stack, SubgraphType currentSubgraph) {
+  std::vector<SubgraphType> recursiveMatch(
+      typename G::NodeRef candidateNode,
+      std::vector<typename G::NodeRef> stack,
+      SubgraphType currentSubgraph) {
     if (EqualityClass::equal(stack.back(), candidateNode)) {
       currentSubgraph.addNode(candidateNode);
 
@@ -56,7 +56,8 @@ public:
 
       std::vector<SubgraphType> matchingSubgraphs;
       for (auto outEdge : candidateNode->getOutEdges()) {
-        for (auto subgraph : recursiveMatch(outEdge->head(), stack, currentSubgraph)) {
+        for (auto subgraph :
+             recursiveMatch(outEdge->head(), stack, currentSubgraph)) {
           matchingSubgraphs.emplace_back(subgraph);
         }
       }
@@ -83,11 +84,11 @@ public:
     return out;
   }
 
-private:
+ private:
   G& MatchGraph;
   std::vector<typename G::NodeRef> MatchNodeList;
 };
 
-}
+} // namespace nom
 
 #endif // NOM_TRANFORMATIONS_MATCH_H

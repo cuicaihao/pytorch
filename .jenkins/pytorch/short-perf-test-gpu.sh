@@ -1,13 +1,17 @@
 #!/bin/bash
 
+# shellcheck disable=SC2034
 COMPACT_JOB_NAME="short-perf-test-gpu"
+
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-cd .jenkins/pytorch/perf_test
+pushd .jenkins/pytorch/perf_test
 
 echo "Running GPU perf test for PyTorch..."
 
-pip install awscli
+# Trying to uninstall PyYAML can cause problem. Workaround according to:
+# https://github.com/pypa/pip/issues/5247#issuecomment-415571153
+pip install -q awscli --ignore-installed PyYAML
 
 # Set multipart_threshold to be sufficiently high, so that `aws s3 cp` is not a multipart read
 # More info at https://github.com/aws/aws-cli/issues/2321
@@ -64,3 +68,5 @@ if [[ "$COMMIT_SOURCE" == master ]]; then
     # but the chance of them executing this line at the same time is low.
     aws s3 cp new_gpu_runtime.json s3://ossci-perf-test/pytorch/gpu_runtime/${MASTER_COMMIT_ID}.json --acl public-read
 fi
+
+popd

@@ -1,8 +1,11 @@
-if (USE_NNPACK)
+if(USE_NNPACK AND BUILD_CAFFE2_OPS)
   add_subdirectory(nnpack)
 endif()
-if (USE_ZSTD)
+if(USE_ZSTD)
   add_subdirectory(zstd)
+endif()
+if(NOT MSVC)
+  add_subdirectory(depthwise)
 endif()
 
 # CPU source, test sources, binary sources

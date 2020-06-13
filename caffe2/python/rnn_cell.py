@@ -240,7 +240,7 @@ class RNNCell(object):
 
     def get_state_names_override(self):
         '''
-        Override this funtion in your custom cell.
+        Override this function in your custom cell.
         It should return the names of the recurrent states.
 
         It's required by apply_over_sequence method in order to allocate
@@ -292,7 +292,7 @@ class LSTMInitializer(object):
         ]
 
 
-# based on http://pytorch.org/docs/master/nn.html#torch.nn.RNNCell
+# based on https://pytorch.org/docs/master/nn.html#torch.nn.RNNCell
 class BasicRNNCell(RNNCell):
     def __init__(
         self,
@@ -912,7 +912,7 @@ class MultiRNNCell(RNNCell):
     '''
     Multilayer RNN via the composition of RNNCell instance.
 
-    It is the resposibility of calling code to ensure the compatibility
+    It is the responsibility of calling code to ensure the compatibility
     of the successive layers in terms of input/output dimensiality, etc.,
     and to ensure that their blobs do not have name conflicts, typically by
     creating the cells with names that specify layer number.
@@ -1314,7 +1314,7 @@ class AttentionCell(RNNCell):
         )
         if (
             scope.CurrentDeviceScope() is not None and
-            scope.CurrentDeviceScope().device_type == caffe2_pb2.CUDA
+            core.IsGPUDeviceType(scope.CurrentDeviceScope().device_type)
         ):
             encoder_length = model.net.CopyGPUToCPU(
                 encoder_length,
@@ -1644,9 +1644,16 @@ class UnrolledCell(RNNCell):
                 axis=0)[0]
             for full_output in all_states
         ]
+        # Interleave the state values similar to
+        #
+        #   x = [1, 3, 5]
+        #   y = [2, 4, 6]
+        #   z = [val for pair in zip(x, y) for val in pair]
+        #   # z is [1, 2, 3, 4, 5, 6]
+        #
+        # and returns it as outputs
         outputs = tuple(
-            six.next(it) for it in
-            itertools.cycle([iter(all_states), iter(states)])
+            state for state_pair in zip(all_states, states) for state in state_pair
         )
         outputs_without_grad = set(range(len(outputs))) - set(
             outputs_with_grads)

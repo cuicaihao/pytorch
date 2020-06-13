@@ -4,7 +4,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import numpy as np
-import cPickle as pickle
+import pickle
 from collections import OrderedDict
 
 from caffe2.proto import caffe2_pb2
@@ -108,7 +108,7 @@ def broadcast_parameters(opts, model, num_xpus, broadcast_computed_param=False):
         else caffe2_pb2.CPU
     for params in all_params:
         assert len(params) % num_xpus == 0, \
-            "Current model dosen't match device number when loading checkpoint"
+            "Current model doesn't match device number when loading checkpoint"
         params_per_xpu = int(len(params) / num_xpus)
         for idx in range(params_per_xpu):
             blobs = [param for param in params[idx::params_per_xpu]]
@@ -123,6 +123,9 @@ def broadcast_parameters(opts, model, num_xpus, broadcast_computed_param=False):
 
 def save_model_params(is_checkpoint, model, checkpoint_path, epoch, opts, best_metric):
     # best_metric=float('-inf')
+    if checkpoint_path is None:
+        return None
+
     try:
         save_model_params_blob(
             model, checkpoint_path, epoch, opts, best_metric

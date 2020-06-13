@@ -7,11 +7,14 @@ from caffe2.python import recurrent, workspace
 from caffe2.python.model_helper import ModelHelper
 from hypothesis import given
 import caffe2.python.hypothesis_test_util as hu
+import caffe2.python.serialized_test.serialized_test_util as serial
 import hypothesis.strategies as st
 import numpy as np
 
+import os
+import unittest
 
-class RecurrentNetworkTest(hu.HypothesisTestCase):
+class RecurrentNetworkTest(serial.SerializedTestCase):
     @given(T=st.integers(1, 4),
            n=st.integers(1, 5),
            d=st.integers(1, 5))
@@ -31,7 +34,7 @@ class RecurrentNetworkTest(hu.HypothesisTestCase):
         self.simple_rnn(T, n, d, model, step, input_t, output_t, output_t_prev,
                         input_blob, initial_input_blob)
 
-    @given(T=st.integers(1, 4),
+    @serial.given(T=st.integers(1, 4),
            n=st.integers(1, 5),
            d=st.integers(1, 5))
     def test_mul(self, T, n, d):
@@ -262,7 +265,7 @@ class RecurrentNetworkTest(hu.HypothesisTestCase):
         since there is no enough element of input_state sequence are available.
         So the initial_state for input_state contains several elements
         (exactly how many pads we need for the first step). Also, because of
-        that all offseting over input_state sequnece is being shifted
+        that all offseting over input_state sequence is being shifted
         by length of initial_input_state: see `link_offset` and `alias_offset`
         arguments of RecurrentNetwork.
 

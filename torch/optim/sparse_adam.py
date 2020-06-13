@@ -4,7 +4,7 @@ from .optimizer import Optimizer
 
 
 class SparseAdam(Optimizer):
-    """Implements lazy version of Adam algorithm suitable for sparse tensors.
+    r"""Implements lazy version of Adam algorithm suitable for sparse tensors.
 
     In this variant, only moments that show up in the gradient get updated, and
     only those portions of the gradient get applied to the parameters.
@@ -34,6 +34,7 @@ class SparseAdam(Optimizer):
         defaults = dict(lr=lr, betas=betas, eps=eps)
         super(SparseAdam, self).__init__(params, defaults)
 
+    @torch.no_grad()
     def step(self, closure=None):
         """Performs a single optimization step.
 
@@ -43,13 +44,14 @@ class SparseAdam(Optimizer):
         """
         loss = None
         if closure is not None:
-            loss = closure()
+            with torch.enable_grad():
+                loss = closure()
 
         for group in self.param_groups:
             for p in group['params']:
                 if p.grad is None:
                     continue
-                grad = p.grad.data
+                grad = p.grad
                 if not grad.is_sparse:
                     raise RuntimeError('SparseAdam does not support dense gradients, please consider Adam instead')
 
@@ -59,9 +61,9 @@ class SparseAdam(Optimizer):
                 if len(state) == 0:
                     state['step'] = 0
                     # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p.data)
+                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
                     # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p.data)
+                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
 
                 state['step'] += 1
 
@@ -82,14 +84,14 @@ class SparseAdam(Optimizer):
                 # Decay the first and second moment running average coefficient
                 #      old <- b * old + (1 - b) * new
                 # <==> old += (1 - b) * (new - old)
-                old_exp_avg_values = exp_avg._sparse_mask(grad)._values()
+                old_exp_avg_values = exp_avg.sparse_mask(grad)._values()
                 exp_avg_update_values = grad_values.sub(old_exp_avg_values).mul_(1 - beta1)
                 exp_avg.add_(make_sparse(exp_avg_update_values))
-                old_exp_avg_sq_values = exp_avg_sq._sparse_mask(grad)._values()
+                old_exp_avg_sq_values = exp_avg_sq.sparse_mask(grad)._values()
                 exp_avg_sq_update_values = grad_values.pow(2).sub_(old_exp_avg_sq_values).mul_(1 - beta2)
                 exp_avg_sq.add_(make_sparse(exp_avg_sq_update_values))
 
-                # Dense addition again is intended, avoiding another _sparse_mask
+                # Dense addition again is intended, avoiding another sparse_mask
                 numer = exp_avg_update_values.add_(old_exp_avg_values)
                 exp_avg_sq_update_values.add_(old_exp_avg_sq_values)
                 denom = exp_avg_sq_update_values.sqrt_().add_(group['eps'])
@@ -99,6 +101,6 @@ class SparseAdam(Optimizer):
                 bias_correction2 = 1 - beta2 ** state['step']
                 step_size = group['lr'] * math.sqrt(bias_correction2) / bias_correction1
 
-                p.data.add_(make_sparse(-step_size * numer.div_(denom)))
+                p.add_(make_sparse(-step_size * numer.div_(denom)))
 
         return loss

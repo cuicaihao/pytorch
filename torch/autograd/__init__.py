@@ -3,15 +3,21 @@
 differentiation of arbitrary scalar valued functions. It requires minimal
 changes to the existing code - you only need to declare :class:`Tensor` s
 for which gradients should be computed with the ``requires_grad=True`` keyword.
+As of now, we only support autograd for floating point :class:`Tensor` types (
+half, float, double and bfloat16) and complex :class:`Tensor` types (cfloat, cdouble).
 """
 import torch
 import warnings
+from typing import Any, Callable, Union, Tuple, Sequence, Optional
+from torch.types import _TensorOrTensors
 
 from .variable import Variable
 from .function import Function, NestedIOFunction
-from .gradcheck import gradcheck
+from .gradcheck import gradcheck, gradgradcheck
 from .grad_mode import no_grad, enable_grad, set_grad_enabled
+from .anomaly_mode import detect_anomaly, set_detect_anomaly
 from . import profiler
+from . import functional
 
 __all__ = ['Variable', 'Function', 'backward', 'grad_mode']
 
@@ -20,12 +26,26 @@ def _make_grads(outputs, grads):
     new_grads = []
     for out, grad in zip(outputs, grads):
         if isinstance(grad, torch.Tensor):
+            if not out.shape == grad.shape:
+                raise RuntimeError("Mismatch in shape: grad_output["
+                                   + str(grads.index(grad)) + "] has a shape of "
+                                   + str(grad.shape) + " and output["
+                                   + str(outputs.index(out)) + "] has a shape of "
+                                   + str(out.shape) + ".")
+            if (out.dtype.is_complex != grad.dtype.is_complex):
+                raise RuntimeError("For complex Tensors, both grad_output and output"
+                                   " are required to have the same dtype."
+                                   " Mismatch in dtype: grad_output["
+                                   + str(grads.index(grad)) + "] has a dtype of "
+                                   + str(grad.dtype) + " and output["
+                                   + str(outputs.index(out)) + "] has a dtype of "
+                                   + str(out.dtype) + ".")
             new_grads.append(grad)
         elif grad is None:
             if out.requires_grad:
                 if out.numel() != 1:
                     raise RuntimeError("grad can be implicitly created only for scalar outputs")
-                new_grads.append(torch.ones_like(out))
+                new_grads.append(torch.ones_like(out, memory_format=torch.preserve_format))
             else:
                 new_grads.append(None)
         else:
@@ -34,26 +54,42 @@ def _make_grads(outputs, grads):
     return tuple(new_grads)
 
 
-def backward(tensors, grad_tensors=None, retain_graph=None, create_graph=False, grad_variables=None):
+def backward(
+    tensors: _TensorOrTensors,
+    grad_tensors: Optional[_TensorOrTensors] = None,
+    retain_graph: Optional[bool] = None,
+    create_graph: bool = False,
+    grad_variables: Optional[_TensorOrTensors] = None,
+) -> None:
     r"""Computes the sum of gradients of given tensors w.r.t. graph leaves.
 
     The graph is differentiated using the chain rule. If any of ``tensors``
     are non-scalar (i.e. their data has more than one element) and require
-    gradient, the function additionally requires specifying ``grad_tensors``.
-    It should be a sequence of matching length, that contains gradient of
-    the differentiated function w.r.t. corresponding tensors (``None`` is an
-    acceptable value for all tensors that don't need gradient tensors).
+    gradient, then the Jacobian-vector product would be computed, in this
+    case the function additionally requires specifying ``grad_tensors``.
+    It should be a sequence of matching length, that contains the "vector"
+    in the Jacobian-vector product, usually the gradient of the differentiated
+    function w.r.t. corresponding tensors (``None`` is an acceptable value for
+    all tensors that don't need gradient tensors).
 
     This function accumulates gradients in the leaves - you might need to zero
     them before calling it.
 
+    .. note::
+        Using this method with ``create_graph=True`` will create a reference cycle
+        between the parameter and its gradient which can cause a memory leak.
+        We recommend using ``autograd.grad`` when creating the graph to avoid this.
+        If you have to use this function, make sure to reset the ``.grad`` fields of your
+        parameters to ``None`` after use to break the cycle and avoid the leak.
+
     Arguments:
         tensors (sequence of Tensor): Tensors of which the derivative will be
             computed.
-        grad_tensors (sequence of (Tensor or None)): Gradients w.r.t.
-            each element of corresponding tensors. None values can be specified for
-            scalar Tensors or ones that don't require grad. If a None value would
-            be acceptable for all grad_tensors, then this argument is optional.
+        grad_tensors (sequence of (Tensor or None)): The "vector" in the Jacobian-vector
+            product, usually gradients w.r.t. each element of corresponding tensors.
+            None values can be specified for scalar Tensors or ones that don't require
+            grad. If a None value would be acceptable for all grad_tensors, then this
+            argument is optional.
         retain_graph (bool, optional): If ``False``, the graph used to compute the grad
             will be freed. Note that in nearly all cases setting this option to ``True``
             is not needed and often can be worked around in a much more efficient
@@ -89,13 +125,21 @@ def backward(tensors, grad_tensors=None, retain_graph=None, create_graph=False, 
         allow_unreachable=True)  # allow_unreachable flag
 
 
-def grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=False,
-         only_inputs=True, allow_unused=False):
+def grad(
+    outputs: _TensorOrTensors,
+    inputs: _TensorOrTensors,
+    grad_outputs: Optional[_TensorOrTensors] = None,
+    retain_graph: Optional[bool] = None,
+    create_graph: bool = False,
+    only_inputs: bool = True,
+    allow_unused: bool = False
+) -> Tuple[torch.Tensor, ...]:
     r"""Computes and returns the sum of gradients of outputs w.r.t. the inputs.
 
     ``grad_outputs`` should be a sequence of length matching ``output``
-    containing the pre-computed gradients w.r.t. each of the outputs. If an
-    output doesn't require_grad, then the gradient can be ``None``).
+    containing the "vector" in Jacobian-vector product, usually the pre-computed
+    gradients w.r.t. each of the outputs. If an output doesn't require_grad,
+    then the gradient can be ``None``).
 
     If ``only_inputs`` is ``True``, the function will only return a list of gradients
     w.r.t the specified inputs. If it's ``False``, then gradient w.r.t. all remaining
@@ -106,10 +150,10 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=Fal
         outputs (sequence of Tensor): outputs of the differentiated function.
         inputs (sequence of Tensor): Inputs w.r.t. which the gradient will be
             returned (and not accumulated into ``.grad``).
-        grad_outputs (sequence of Tensor): Gradients w.r.t. each output.
-            None values can be specified for scalar Tensors or ones that don't require
-            grad. If a None value would be acceptable for all grad_tensors, then this
-            argument is optional. Default: None.
+        grad_outputs (sequence of Tensor): The "vector" in the Jacobian-vector product.
+            Usually gradients w.r.t. each output. None values can be specified for scalar
+            Tensors or ones that don't require grad. If a None value would be acceptable
+            for all grad_tensors, then this argument is optional. Default: None.
         retain_graph (bool, optional): If ``False``, the graph used to compute the grad
             will be freed. Note that in nearly all cases setting this option to ``True``
             is not needed and often can be worked around in a much more efficient
@@ -128,6 +172,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=Fal
 
     outputs = (outputs,) if isinstance(outputs, torch.Tensor) else tuple(outputs)
     inputs = (inputs,) if isinstance(inputs, torch.Tensor) else tuple(inputs)
+
     if grad_outputs is None:
         grad_outputs = [None] * len(outputs)
     elif isinstance(grad_outputs, torch.Tensor):
@@ -136,6 +181,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=Fal
         grad_outputs = list(grad_outputs)
 
     grad_outputs = _make_grads(outputs, grad_outputs)
+
     if retain_graph is None:
         retain_graph = create_graph
 
@@ -154,8 +200,8 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=Fal
 #
 # This function returns whether the checkpointing is valid i.e. torch.autograd.backward
 # or not i.e. torch.autograd.grad. The implementation works by maintaining a thread
-# local variable in torch/csrc/autograd/engine.cpp which looks at the FunctionTask
-# in the stack and before a FunctionTask is executed in evaluate_function, it
+# local variable in torch/csrc/autograd/engine.cpp which looks at the NodeTask
+# in the stack and before a NodeTask is executed in evaluate_function, it
 # checks for whether reentrant backwards is imperative or not.
 # See https://github.com/pytorch/pytorch/pull/4594 for more discussion/context
 def _is_checkpoint_valid():
@@ -165,7 +211,6 @@ def _is_checkpoint_valid():
 def variable(*args, **kwargs):
     warnings.warn("torch.autograd.variable(...) is deprecated, use torch.tensor(...) instead")
     return torch.tensor(*args, **kwargs)
-
 
 if not torch._C._autograd_init():
     raise RuntimeError("autograd initialization failed")

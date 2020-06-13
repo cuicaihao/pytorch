@@ -17,6 +17,26 @@ class TransformedDistribution(Distribution):
     Note that the ``.event_shape`` of a :class:`TransformedDistribution` is the
     maximum shape of its base distribution and its transforms, since transforms
     can introduce correlations among events.
+
+    An example for the usage of :class:`TransformedDistribution` would be::
+
+        # Building a Logistic Distribution
+        # X ~ Uniform(0, 1)
+        # f = a + b * logit(X)
+        # Y ~ f(X) ~ Logistic(a, b)
+        base_distribution = Uniform(0, 1)
+        transforms = [SigmoidTransform().inv, AffineTransform(loc=a, scale=b)]
+        logistic = TransformedDistribution(base_distribution, transforms)
+
+    For more examples, please look at the implementations of
+    :class:`~torch.distributions.gumbel.Gumbel`,
+    :class:`~torch.distributions.half_cauchy.HalfCauchy`,
+    :class:`~torch.distributions.half_normal.HalfNormal`,
+    :class:`~torch.distributions.log_normal.LogNormal`,
+    :class:`~torch.distributions.pareto.Pareto`,
+    :class:`~torch.distributions.weibull.Weibull`,
+    :class:`~torch.distributions.relaxed_bernoulli.RelaxedBernoulli` and
+    :class:`~torch.distributions.relaxed_categorical.RelaxedOneHotCategorical`
     """
     arg_constraints = {}
 
@@ -35,6 +55,16 @@ class TransformedDistribution(Distribution):
         batch_shape = shape[:len(shape) - event_dim]
         event_shape = shape[len(shape) - event_dim:]
         super(TransformedDistribution, self).__init__(batch_shape, event_shape, validate_args=validate_args)
+
+    def expand(self, batch_shape, _instance=None):
+        new = self._get_checked_instance(TransformedDistribution, _instance)
+        batch_shape = torch.Size(batch_shape)
+        base_dist_batch_shape = batch_shape + self.base_dist.batch_shape[len(self.batch_shape):]
+        new.base_dist = self.base_dist.expand(base_dist_batch_shape)
+        new.transforms = self.transforms
+        super(TransformedDistribution, new).__init__(batch_shape, self.event_shape, validate_args=False)
+        new._validate_args = self._validate_args
+        return new
 
     @constraints.dependent_property
     def support(self):
@@ -79,12 +109,12 @@ class TransformedDistribution(Distribution):
         y = value
         for transform in reversed(self.transforms):
             x = transform.inv(y)
-            log_prob -= _sum_rightmost(transform.log_abs_det_jacobian(x, y),
-                                       event_dim - transform.event_dim)
+            log_prob = log_prob - _sum_rightmost(transform.log_abs_det_jacobian(x, y),
+                                                 event_dim - transform.event_dim)
             y = x
 
-        log_prob += _sum_rightmost(self.base_dist.log_prob(y),
-                                   event_dim - len(self.base_dist.event_shape))
+        log_prob = log_prob + _sum_rightmost(self.base_dist.log_prob(y),
+                                             event_dim - len(self.base_dist.event_shape))
         return log_prob
 
     def _monotonize_cdf(self, value):
@@ -95,7 +125,7 @@ class TransformedDistribution(Distribution):
         sign = 1
         for transform in self.transforms:
             sign = sign * transform.sign
-        if sign is 1:
+        if isinstance(sign, int) and sign == 1:
             return value
         return sign * (value - 0.5) + 0.5
 

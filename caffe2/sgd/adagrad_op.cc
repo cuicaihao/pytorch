@@ -2,10 +2,12 @@
 
 namespace caffe2 {
 
-REGISTER_CPU_OPERATOR(Adagrad, AdagradOp<float, CPUContext>);
+REGISTER_CPU_OPERATOR(Adagrad, AdagradOp<CPUContext>);
+// For backward compatibility
+REGISTER_CPU_OPERATOR_WITH_ENGINE(Adagrad, SIMD, AdagradOp<CPUContext>);
 OPERATOR_SCHEMA(Adagrad)
     .NumInputs(4)
-    .NumOutputs(2)
+    .NumOutputs(2, 4)
     .AllowInplace({{0, 0}, {1, 1}})
     .SetDoc(R"DOC(
 
@@ -14,9 +16,12 @@ history. Concretely, given inputs (param, grad, moment, learning_rate),
 computes
 
     new_moment = moment + square(grad)
-    new_grad = learning_rate * grad / (sqrt(new_moment) + epsilon)
-    new_param = param + new_grad
+    effective_lr = learning_rate / (sqrt(new_moment) + epsilon)
+    update = learning_rate * grad / (sqrt(new_moment) + epsilon)
+    new_param = param + update
 and returns (new_param, new_moment).
+
+Optionally returns effective_lr and update as well.
 
 )DOC")
     .Input(0, "param", "Parameters to be updated")
@@ -25,13 +30,45 @@ and returns (new_param, new_moment).
     .Input(3, "lr", "learning rate")
     .Output(0, "output_param", "Updated parameters")
     .Output(1, "output_moment", "Updated moment")
+    .Output(2, "output_effective_lr", "(optional) Effective learning rate")
+    .Output(3, "output_update", "(optional) Actual update that is applied.")
+
     .Arg("epsilon", "Default 1e-5")
     .Arg(
         "decay",
         "Default 1. If it is in (0, 1), the gradient square sum "
         "is decayed by this factor.");
 
-REGISTER_CPU_OPERATOR(SparseAdagrad, SparseAdagradOp<float, CPUContext>);
+static OpSchema::Cost CostInferenceForSparseAdagrad(
+    const OperatorDef& /* unused */,
+    const vector<TensorShape>& inputs) {
+  CAFFE_ENFORCE_GE(
+      inputs.size(), 4, "SparseAdagrad requires at least 4 inputs");
+
+  const TensorShape param = inputs[0];
+  const TensorShape moment = inputs[1];
+  const TensorShape indices = inputs[2];
+  const TensorShape grad = inputs[3];
+
+  uint64_t n = nElemFromDim(indices);
+  uint64_t grad_size = nElemFromDim(grad);
+
+  OpSchema::Cost c;
+  // See adagrad_op.h (note that decay is 1 for SparseAdagrad).
+  // 2 multiplications, 3 additions, 1 division, and 1 sqrt
+  // (optimistically count sqrt as one flop).
+  c.flops = grad_size * 7;
+  c.bytes_written =
+      grad_size * (sizeof(param.data_type()) + sizeof(moment.data_type()));
+  c.bytes_read = c.bytes_written + grad_size * sizeof(grad.data_type()) +
+      n * sizeof(indices.data_type());
+
+  return c;
+}
+
+REGISTER_CPU_OPERATOR(SparseAdagrad, SparseAdagradOp);
+// For backward compatibility
+REGISTER_CPU_OPERATOR_WITH_ENGINE(SparseAdagrad, SIMD, SparseAdagradOp);
 OPERATOR_SCHEMA(SparseAdagrad)
     .NumInputs(5)
     .NumOutputs(2)
@@ -50,11 +87,16 @@ new_moment) as in the dense case.
     .Input(4, "lr", "learning rate")
     .Output(0, "output_param", "Updated parameters")
     .Output(1, "output_moment_1", "Updated moment")
-    .Arg("epsilon", "Default 1e-5");
+    .Arg("epsilon", "Default 1e-5")
+    .CostInferenceFunction(
+        OpSchema::CostInferenceFunctionType(CostInferenceForSparseAdagrad));
 
-REGISTER_CPU_OPERATOR(
+REGISTER_CPU_OPERATOR(RowWiseSparseAdagrad, RowWiseSparseAdagradOp<CPUContext>);
+// For backward compatibility
+REGISTER_CPU_OPERATOR_WITH_ENGINE(
     RowWiseSparseAdagrad,
-    RowWiseSparseAdagradOp<float, CPUContext>);
+    SIMD,
+    RowWiseSparseAdagradOp<CPUContext>);
 OPERATOR_SCHEMA(RowWiseSparseAdagrad)
     .NumInputs(5)
     .NumOutputs(2)
@@ -82,4 +124,4 @@ also be a 1D tensor indexing into the rows of param.
 SHOULD_NOT_DO_GRADIENT(Adagrad);
 SHOULD_NOT_DO_GRADIENT(SparseAdagrad);
 SHOULD_NOT_DO_GRADIENT(RowWiseSparseAdagrad);
-}
+} // namespace caffe2

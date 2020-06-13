@@ -1,3 +1,5 @@
-#include "../THCTensorMasked.cuh"
-#include "../generic/THCTensorMasked.cu"
-#include "../THCGenerateHalfType.h"
+#include <THC/THCTensorMasked.cuh>
+#include <THC/THCTensor.hpp>
+
+#include <THC/generic/THCTensorMasked.cu>
+#include <THC/THCGenerateHalfType.h>

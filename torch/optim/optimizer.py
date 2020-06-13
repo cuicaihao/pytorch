@@ -1,10 +1,17 @@
-from collections import defaultdict, Iterable
+from collections import defaultdict
+from torch._six import container_abcs
 
 import torch
 from copy import deepcopy
 from itertools import chain
 
-required = object()
+
+class _RequiredParameter(object):
+    """Singleton class representing a required parameter for an Optimizer."""
+    def __repr__(self):
+        return "<required parameter>"
+
+required = _RequiredParameter()
 
 
 class Optimizer(object):
@@ -23,6 +30,7 @@ class Optimizer(object):
     """
 
     def __init__(self, params, defaults):
+        torch._C._log_api_usage_once("python.optimizer")
         self.defaults = defaults
 
         if isinstance(params, torch.Tensor):
@@ -44,6 +52,7 @@ class Optimizer(object):
 
     def __getstate__(self):
         return {
+            'defaults': self.defaults,
             'state': self.state,
             'param_groups': self.param_groups,
         }
@@ -71,14 +80,21 @@ class Optimizer(object):
             differs between optimizer classes.
         * param_groups - a dict containing all parameter groups
         """
-        # Save ids instead of Tensors
+        # Save order indices instead of Tensors
+        param_mappings = {}
+        start_index = 0
+
         def pack_group(group):
+            nonlocal start_index
             packed = {k: v for k, v in group.items() if k != 'params'}
-            packed['params'] = [id(p) for p in group['params']]
+            param_mappings.update({id(p): i for i, p in enumerate(group['params'], start_index)
+                                   if id(p) not in param_mappings})
+            packed['params'] = [param_mappings[id(p)] for p in group['params']]
+            start_index += len(packed['params'])
             return packed
         param_groups = [pack_group(g) for g in self.param_groups]
-        # Remap state to use ids as keys
-        packed_state = {(id(k) if isinstance(k, torch.Tensor) else k): v
+        # Remap state to use order indices as keys
+        packed_state = {(param_mappings[id(k)] if isinstance(k, torch.Tensor) else k): v
                         for k, v in self.state.items()}
         return {
             'state': packed_state,
@@ -123,7 +139,7 @@ class Optimizer(object):
                 return value
             elif isinstance(value, dict):
                 return {k: cast(param, v) for k, v in value.items()}
-            elif isinstance(value, Iterable):
+            elif isinstance(value, container_abcs.Iterable):
                 return type(value)(cast(param, v) for v in value)
             else:
                 return value
@@ -161,6 +177,10 @@ class Optimizer(object):
         Arguments:
             closure (callable): A closure that reevaluates the model and
                 returns the loss. Optional for most optimizers.
+
+        .. note::
+            Unless otherwise specified, this function should not modify the
+            ``.grad`` field of the parameters.
         """
         raise NotImplementedError
 
@@ -189,8 +209,6 @@ class Optimizer(object):
             if not isinstance(param, torch.Tensor):
                 raise TypeError("optimizer can only optimize Tensors, "
                                 "but one of the params is " + torch.typename(param))
-            if not param.requires_grad:
-                raise ValueError("optimizing a parameter that doesn't require gradients")
             if not param.is_leaf:
                 raise ValueError("can't optimize a non-leaf Tensor")
 

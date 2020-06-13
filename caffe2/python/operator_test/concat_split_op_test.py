@@ -3,12 +3,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import numpy as np
-import hypothesis.strategies as st
-import unittest
-import caffe2.python.hypothesis_test_util as hu
+from caffe2.proto import caffe2_pb2
 from caffe2.python import core
+import caffe2.python.hypothesis_test_util as hu
+import caffe2.python.serialized_test.serialized_test_util as serial
 from hypothesis import given
+import hypothesis.strategies as st
+import numpy as np
+import unittest
 
 
 @st.composite
@@ -43,8 +45,8 @@ def _tensor_splits(draw, add_axis=False):
         )
 
 
-class TestConcatSplitOps(hu.HypothesisTestCase):
-    @given(tensor_splits=_tensor_splits(),
+class TestConcatSplitOps(serial.SerializedTestCase):
+    @serial.given(tensor_splits=_tensor_splits(),
            **hu.gcs)
     def test_concat(self, tensor_splits, gc, dc):
         axis, _, splits = tensor_splits
@@ -60,10 +62,14 @@ class TestConcatSplitOps(hu.HypothesisTestCase):
             gc, op, splits, lambda *splits: (
                 np.concatenate(splits, axis=axis),
                 np.array([a.shape[axis] for a in splits])
-            )
+            ),
+            ensure_outputs_are_inferred=True,
         )
         self.assertDeviceChecks(dc, op, splits, [0, 1])
-        self.assertGradientChecks(gc, op, splits, 0, [0])
+        self.assertGradientChecks(
+            gc, op, splits, 0, [0],
+            ensure_outputs_are_inferred=True,
+        )
 
     @given(tensor_splits=_tensor_splits(add_axis=True),
            **hu.gcs)
@@ -85,13 +91,17 @@ class TestConcatSplitOps(hu.HypothesisTestCase):
                     axis=axis
                 ),
                 np.array([1] * len(splits))
-            )
+            ),
+            ensure_outputs_are_inferred=True,
         )
         self.assertDeviceChecks(dc, op, splits, [0, 1])
         for i in range(len(splits)):
-            self.assertGradientChecks(gc, op, splits, i, [0])
+            self.assertGradientChecks(
+                gc, op, splits, i, [0],
+                ensure_outputs_are_inferred=True,
+            )
 
-    @given(tensor_splits=_tensor_splits(),
+    @serial.given(tensor_splits=_tensor_splits(),
            split_as_arg=st.booleans(),
            **hu.gcs)
     def test_split(self, tensor_splits, split_as_arg, gc, dc):
@@ -122,9 +132,65 @@ class TestConcatSplitOps(hu.HypothesisTestCase):
                 for i in range(len(split))
             ]
         outputs_with_grad = range(len(split_info))
-        self.assertReferenceChecks(gc, op, input_tensors, split_ref)
+        self.assertReferenceChecks(
+            gc, op, input_tensors, split_ref,
+            ensure_outputs_are_inferred=True,
+        )
         self.assertDeviceChecks(dc, op, input_tensors, outputs_with_grad)
-        self.assertGradientChecks(gc, op, input_tensors, 0, outputs_with_grad)
+        self.assertGradientChecks(
+            gc, op, input_tensors, 0, outputs_with_grad,
+            ensure_outputs_are_inferred=True,
+        )
+
+    @serial.given(
+        inputs=hu.lengths_tensor(
+            dtype=np.float32,
+            min_value=1,
+            max_value=5,
+            allow_empty=True,
+        ),
+        **hu.gcs
+    )
+    def test_split_by_lengths(self, inputs, gc, dc):
+        data, lengths = inputs
+        len_len = len(lengths)
+
+        def _find_factor_simple(x):
+            for i in [2, 3, 5]:
+                if x % i == 0:
+                    return i
+            return x
+
+        num_output = _find_factor_simple(len_len)
+        axis = 0
+        op = core.CreateOperator(
+            "SplitByLengths",
+            ["data", "lengths"],
+            ['X_{}'.format(i) for i in range(num_output)],
+            axis=axis,
+        )
+
+        def split_by_lengths_ref(data, lengths, num_output=num_output, axis=0):
+            idxs = np.cumsum([0] + list(lengths)).astype(np.int32)
+            return [
+                np.array(
+                    data.take(
+                        np.arange(
+                            idxs[i * len_len // num_output],
+                            idxs[(i + 1) * len_len // num_output]
+                        ),
+                        axis=axis
+                    )
+                ) for i in range(num_output)
+            ]
+        outputs_with_grad = range(num_output)
+        input_tensors = [data, lengths]
+        self.assertReferenceChecks(
+            hu.cpu_do, op, input_tensors, split_by_lengths_ref)
+        self.assertDeviceChecks(dc, op, input_tensors, outputs_with_grad)
+        self.assertGradientChecks(
+            hu.cpu_do, op, input_tensors, 0, outputs_with_grad,
+            input_device_options={"lengths": hu.cpu_do})
 
 
 if __name__ == "__main__":
