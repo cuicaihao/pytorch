@@ -1,7 +1,7 @@
 torch
 =====
 The torch package contains data structures for multi-dimensional
-tensors and mathematical operations over these are defined.
+tensors and defines mathematical operations over these tensors.
 Additionally, it provides many utilities for efficient serializing of
 Tensors and arbitrary types, and other useful utilities.
 
@@ -73,6 +73,9 @@ Creation Ops
     quantize_per_tensor
     quantize_per_channel
     dequantize
+    complex
+    polar
+    heaviside
 
 Indexing, Slicing, Joining, Mutating Ops
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -82,20 +85,33 @@ Indexing, Slicing, Joining, Mutating Ops
 
     cat
     chunk
+    column_stack
+    dstack
     gather
+    hstack
     index_select
     masked_select
+    movedim
+    moveaxis
     narrow
     nonzero
     reshape
+    row_stack
+    scatter
+    scatter_add
     split
     squeeze
     stack
+    swapaxes
+    swapdims
     t
     take
+    tensor_split
+    tile
     transpose
     unbind
     unsqueeze
+    vstack
     where
 
 .. _generators:
@@ -245,15 +261,21 @@ Pointwise Ops
     abs
     absolute
     acos
+    arccos
     acosh
+    arccosh
     add
     addcdiv
     addcmul
     angle
     asin
+    arcsin
     asinh
+    arcsinh
     atan
+    arctan
     atanh
+    arctanh
     atan2
     bitwise_not
     bitwise_and
@@ -261,22 +283,31 @@ Pointwise Ops
     bitwise_xor
     ceil
     clamp
+    clip
     conj
+    copysign
     cos
     cosh
     deg2rad
     div
+    divide
     digamma
     erf
     erfc
     erfinv
     exp
+    exp2
     expm1
+    fake_quantize_per_channel_affine
+    fake_quantize_per_tensor_affine
+    fix
+    float_power
     floor
     floor_divide
     fmod
     frac
     imag
+    ldexp
     lerp
     lgamma
     log
@@ -289,9 +320,18 @@ Pointwise Ops
     logical_not
     logical_or
     logical_xor
+    logit
+    hypot
+    i0
+    igamma
+    igammac
     mul
+    multiply
     mvlgamma
+    nan_to_num
     neg
+    negative
+    nextafter
     polygamma
     pow
     rad2deg
@@ -302,14 +342,20 @@ Pointwise Ops
     rsqrt
     sigmoid
     sign
+    sgn
+    signbit
     sin
+    sinc
     sinh
     sqrt
     square
+    sub
+    subtract
     tan
     tanh
     true_divide
     trunc
+    xlogy
 
 Reduction Ops
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -319,13 +365,23 @@ Reduction Ops
 
     argmax
     argmin
+    amax
+    amin
+    all
+    any
+    max
+    min
     dist
     logsumexp
     mean
     median
+    nanmedian
     mode
     norm
+    nansum
     prod
+    quantile
+    nanquantile
     std
     std_mean
     sum
@@ -333,6 +389,7 @@ Reduction Ops
     unique_consecutive
     var
     var_mean
+    count_nonzero
 
 Comparison Ops
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -345,19 +402,30 @@ Comparison Ops
     eq
     equal
     ge
+    greater_equal
     gt
+    greater
     isclose
     isfinite
     isinf
+    isposinf
+    isneginf
     isnan
+    isreal
     kthvalue
     le
+    less_equal
     lt
-    max
-    min
+    less
+    maximum
+    minimum
+    fmax
+    fmin
     ne
+    not_equal
     sort
     topk
+    msort
 
 
 Spectral Ops
@@ -366,16 +434,13 @@ Spectral Ops
     :toctree: generated
     :nosignatures:
 
-    fft
-    ifft
-    rfft
-    irfft
     stft
     istft
     bartlett_window
     blackman_window
     hamming_window
     hann_window
+    kaiser_window
 
 
 Other Operations
@@ -385,12 +450,18 @@ Other Operations
     :toctree: generated
     :nosignatures:
 
+    atleast_1d
+    atleast_2d
+    atleast_3d
     bincount
     block_diag
     broadcast_tensors
+    broadcast_to
+    broadcast_shapes
     bucketize
     cartesian_prod
     cdist
+    clone
     combinations
     cross
     cummax
@@ -401,15 +472,20 @@ Other Operations
     diag_embed
     diagflat
     diagonal
+    diff
     einsum
     flatten
     flip
     fliplr
     flipud
+    kron
     rot90
+    gcd
     histc
     meshgrid
+    lcm
     logcumsumexp
+    ravel
     renorm
     repeat_interleave
     roll
@@ -421,6 +497,8 @@ Other Operations
     triu
     triu_indices
     vander
+    view_as_real
+    view_as_complex
 
 
 BLAS and LAPACK Operations
@@ -443,6 +521,7 @@ BLAS and LAPACK Operations
     eig
     geqrf
     ger
+    inner
     inverse
     det
     logdet
@@ -454,10 +533,12 @@ BLAS and LAPACK Operations
     matmul
     matrix_power
     matrix_rank
+    matrix_exp
     mm
     mv
     orgqr
     ormqr
+    outer
     pinverse
     qr
     solve
@@ -468,6 +549,7 @@ BLAS and LAPACK Operations
     lobpcg
     trapz
     triangular_solve
+    vdot
 
 Utilities
 ----------------------------------
@@ -478,5 +560,10 @@ Utilities
     compiled_with_cxx11_abi
     result_type
     can_cast
-
     promote_types
+    use_deterministic_algorithms
+    are_deterministic_algorithms_enabled
+    set_warn_always
+    is_warn_always_enabled
+    vmap
+    _assert

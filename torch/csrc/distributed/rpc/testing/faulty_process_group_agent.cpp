@@ -1,3 +1,4 @@
+#include <torch/csrc/distributed/rpc/request_callback_impl.h>
 #include <torch/csrc/distributed/rpc/testing/faulty_process_group_agent.h>
 #include <torch/csrc/distributed/rpc/utils.h>
 
@@ -5,17 +6,13 @@ namespace torch {
 namespace distributed {
 namespace rpc {
 
-namespace {
-constexpr auto kSecToMsConversion = 1000;
-}
-
 std::string fromVec(const std::vector<char>& vec) {
   return std::string(vec.begin(), vec.end());
 }
 
 FaultyProcessGroupAgent::FaultyProcessGroupAgent(
     std::string workerName,
-    std::shared_ptr<c10d::ProcessGroup> pg,
+    c10::intrusive_ptr<::c10d::ProcessGroup> pg,
     int numSendRecvThreads,
     std::chrono::milliseconds rpcTimeout,
     const std::vector<std::string>& messagesToFail,
@@ -25,7 +22,8 @@ FaultyProcessGroupAgent::FaultyProcessGroupAgent(
           std::move(workerName),
           std::move(pg),
           numSendRecvThreads,
-          rpcTimeout),
+          rpcTimeout,
+          std::make_unique<RequestCallbackImpl>()),
       failNumSends_(failNumSends),
       messageTypesToFail_(parseMessagesToFailInput(messagesToFail)),
       messageTypesToDelay_(parseMessagesToDelay(messageTypesToDelay)) {}
@@ -58,10 +56,11 @@ std::unordered_map<MessageType, float, std::hash<int>> FaultyProcessGroupAgent::
   return delayMessages;
 }
 
-std::shared_ptr<FutureMessage> FaultyProcessGroupAgent::send(
+std::shared_ptr<JitFuture> FaultyProcessGroupAgent::send(
     const WorkerInfo& to,
     Message&& message,
-    const float rpcTimeoutSeconds) {
+    const float rpcTimeoutSeconds,
+    const std::unordered_map<c10::DeviceIndex, c10::DeviceIndex>& deviceMap) {
   // We only fail control messages that have been specified by the test case.
   // For all other messages, we just send them without any failures.
   if (!shouldFailMessage(message.type())) {
@@ -80,11 +79,11 @@ std::shared_ptr<FutureMessage> FaultyProcessGroupAgent::send(
   if (failMessageCountMap_[key] < failNumSends_) {
     failMessageCountMap_[key]++;
     lock.unlock();
-    auto fm = std::make_shared<FutureMessage>();
-    fm->setError(makeRPCError(
+    auto jitFuture = std::make_shared<JitFuture>(at::AnyClassType::get());
+    jitFuture->setError(std::make_exception_ptr(std::runtime_error(makeRPCError(
         c10::str("Send attempt failed intentionally for ", key),
-        RPCErrorType::INTENTIONAL_FAILURE));
-    return fm;
+        RPCErrorType::INTENTIONAL_FAILURE))));
+    return jitFuture;
   } else {
     lock.unlock();
     return ProcessGroupAgent::send(to, std::move(message), rpcTimeoutSeconds);

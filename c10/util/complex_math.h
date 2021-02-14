@@ -1,9 +1,9 @@
 #if !defined(C10_INTERNAL_INCLUDE_COMPLEX_REMAINING_H)
-#error "c10/util/complex_math.h is not meant to be individually included. Include c10/util/complex_type.h instead."
+#error "c10/util/complex_math.h is not meant to be individually included. Include c10/util/complex.h instead."
 #endif
 
 
-namespace std {
+namespace c10_complex_math {
 
 // Exponential functions
 
@@ -34,14 +34,29 @@ C10_HOST_DEVICE inline c10::complex<T> log10(const c10::complex<T> &x) {
 #endif
 }
 
+template<typename T>
+C10_HOST_DEVICE inline c10::complex<T> log2(const c10::complex<T> &x) {
+  const c10::complex<T> log2 = c10::complex<T>(::log(2.0), 0.0);
+  return c10_complex_math::log(x) / log2;
+}
+
 // Power functions
+//
+#ifdef _LIBCPP_VERSION
+namespace _detail {
+TORCH_API c10::complex<float> sqrt(const c10::complex<float>& in);
+TORCH_API c10::complex<double> sqrt(const c10::complex<double>& in);
+};
+#endif
 
 template<typename T>
 C10_HOST_DEVICE inline c10::complex<T> sqrt(const c10::complex<T> &x) {
 #if defined(__CUDACC__) || defined(__HIPCC__)
   return static_cast<c10::complex<T>>(thrust::sqrt(c10_internal::cuda101bug_cast_c10_complex_to_thrust_complex(x)));
-#else
+#elif !defined(_LIBCPP_VERSION)
   return static_cast<c10::complex<T>>(std::sqrt(static_cast<std::complex<T>>(x)));
+#else
+  return _detail::sqrt(x);
 #endif
 }
 
@@ -213,4 +228,46 @@ C10_HOST_DEVICE inline c10::complex<T> atanh(const c10::complex<T> &x) {
 #endif
 }
 
-} // namespace std
+}  // namespace c10_complex_math
+
+using c10_complex_math::exp;
+using c10_complex_math::log;
+using c10_complex_math::log10;
+using c10_complex_math::log2;
+using c10_complex_math::sqrt;
+using c10_complex_math::pow;
+using c10_complex_math::sin;
+using c10_complex_math::cos;
+using c10_complex_math::tan;
+using c10_complex_math::asin;
+using c10_complex_math::acos;
+using c10_complex_math::atan;
+using c10_complex_math::sinh;
+using c10_complex_math::cosh;
+using c10_complex_math::tanh;
+using c10_complex_math::asinh;
+using c10_complex_math::acosh;
+using c10_complex_math::atanh;
+
+namespace std {
+
+using c10_complex_math::exp;
+using c10_complex_math::log;
+using c10_complex_math::log10;
+using c10_complex_math::log2;
+using c10_complex_math::sqrt;
+using c10_complex_math::pow;
+using c10_complex_math::sin;
+using c10_complex_math::cos;
+using c10_complex_math::tan;
+using c10_complex_math::asin;
+using c10_complex_math::acos;
+using c10_complex_math::atan;
+using c10_complex_math::sinh;
+using c10_complex_math::cosh;
+using c10_complex_math::tanh;
+using c10_complex_math::asinh;
+using c10_complex_math::acosh;
+using c10_complex_math::atanh;
+
+}

@@ -3,6 +3,7 @@
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/irparser.h>
 #include <torch/csrc/jit/ir/subgraph_matcher.h>
+#include <torch/csrc/jit/passes/subgraph_rewrite.h>
 
 namespace torch {
 namespace jit {
@@ -19,8 +20,9 @@ c10::optional<IValue> getIValue(
     const std::unordered_map<std::string, Value*>& vmap);
 void replaceConvolutionWithAtenConv(std::shared_ptr<Graph>& graph);
 
-using MatchFilter = std::function<
-    bool(const Match&, const std::unordered_map<std::string, Value*>&)>;
+bool isClampFusable(
+    const Match& match,
+    const std::unordered_map<std::string, Value*>& vmap);
 
 // This struct contains a compiled IR patterns slated for use in the
 // findPatternMatches function. The struct encapsulates the common
@@ -37,10 +39,11 @@ struct PatternInfo {
   static PatternInfo parse_from_str(
       std::string pattern_string,
       const std::vector<MatchFilter>& filters = {}) {
-    PatternInfo rv{std::move(pattern_string),
-                   std::make_unique<Graph>(),
-                   decltype(vmap){},
-                   filters};
+    PatternInfo rv{
+        std::move(pattern_string),
+        std::make_unique<Graph>(),
+        decltype(vmap){},
+        filters};
     parseIR(rv.pattern_string, rv.pattern_graph.get(), rv.vmap);
     return rv;
   }

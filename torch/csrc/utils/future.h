@@ -1,6 +1,16 @@
 #pragma once
 
-#include <ATen/core/ivalue.h>
+#include <atomic>
+#include <condition_variable>
+#include <exception>
+#include <functional>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include <c10/util/Logging.h>
+#include <c10/util/Optional.h>
+#include <torch/csrc/WindowsTorchApiMacro.h>
 
 namespace torch {
 
@@ -26,7 +36,7 @@ class TORCH_API FutureError final : public std::exception {
 // Most implementation is copied from FutureMessage and
 // c10::ivalue::Future
 template <typename T>
-class TORCH_API Future final {
+class TORCH_PYTHON_API Future final {
  public:
   Future() = default;
 
